@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""
+RSS Feed Generator for Google Sites
+Scrapes content and generates RSS feed for static sites
+"""
+
+import requests
+from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
+from datetime import datetime
+import hashlib
+import json
+import os
+
+class GoogleSitesRSSGenerator:
+    def __init__(self, url, output_file="modular_construction_feed.xml"):
+        self.url = url
+        self.output_file = output_file
+        self.cache_file = "content_cache.json"
+        
+    def fetch_content(self):
+        """Fetch and parse the website content"""
+        try:
+            response = requests.get(self.url)
+            response.raise_for_status()
+            return BeautifulSoup(response.content, 'html.parser')
+        except requests.RequestException as e:
+            print(f"Error fetching content: {e}")
+            return None
+    
+    def extract_content_sections(self, soup):
+        """Extract main content sections from the page"""
+        sections = []
+        
+        # Look for main content areas (adjust selectors based on actual HTML structure)
+        content_areas = soup.find_all(['div', 'section', 'article'])
+        
+        for area in content_areas:
+            text = area.get_text(strip=True)
+            if len(text) > 100:  # Only include substantial content
+                sections.append({
+                    'content': text[:500] + '...' if len(text) > 500 else text,
+                    'hash': hashlib.md5(text.encode()).hexdigest()
+                })
+        
+        return sections
+    
+    def load_cache(self):
+        """Load previously seen content hashes"""
+        if os.path.exists(self.cache_file):
+            with open(self.cache_file, 'r') as f:
+                return json.load(f)
+        return {'hashes': [], 'last_update': None}
+    
+    def save_cache(self, cache_data):
+        """Save content hashes to cache"""
+        with open(self.cache_file, 'w') as f:
+            json.dump(cache_data, f)
+    
+    def generate_rss(self):
+        """Generate RSS feed XML"""
+        soup = self.fetch_content()
+        if not soup:
+            return False
+        
+        # Load cache to check for changes
+        cache = self.load_cache()
+        current_hashes = []
+        new_content = []
+        
+        sections = self.extract_content_sections(soup)
+        
+        for section in sections:
+            current_hashes.append(section['hash'])
+            if section['hash'] not in cache['hashes']:
+                new_content.append(section)
+        
+        # Create RSS XML structure
+        rss = ET.Element('rss', version='2.0')
+        channel = ET.SubElement(rss, 'channel')
+        
+        # Channel metadata
+        ET.SubElement(channel, 'title').text = 'Modular Construction Research - Dr. Al-Hussein'
+        ET.SubElement(channel, 'link').text = self.url
+        ET.SubElement(channel, 'description').text = 'Updates from Dr. Mohamed Al-Hussein\'s modular construction research program'
+        ET.SubElement(channel, 'language').text = 'en-us'
+        ET.SubElement(channel, 'lastBuildDate').text = datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
+        
+        # Add new content as RSS items
+        for content in new_content:
+            item = ET.SubElement(channel, 'item')
+            ET.SubElement(item, 'title').text = f"Content Update - {datetime.now().strftime('%Y-%m-%d')}"
+            ET.SubElement(item, 'link').text = self.url
+            ET.SubElement(item, 'description').text = content['content']
+            ET.SubElement(item, 'pubDate').text = datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
+            ET.SubElement(item, 'guid').text = f"{self.url}#{content['hash']}"
+        
+        # If no new content, add a placeholder item
+        if not new_content:
+            item = ET.SubElement(channel, 'item')
+            ET.SubElement(item, 'title').text = 'No Recent Updates'
+            ET.SubElement(item, 'link').text = self.url
+            ET.SubElement(item, 'description').text = 'No new content detected since last check'
+            ET.SubElement(item, 'pubDate').text = datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
+            ET.SubElement(item, 'guid').text = f"{self.url}#no-update-{datetime.now().strftime('%Y%m%d')}"
+        
+        # Write RSS to file
+        tree = ET.ElementTree(rss)
+        ET.indent(tree, space="  ")
+        tree.write(self.output_file, encoding='utf-8', xml_declaration=True)
+        
+        # Update cache
+        cache['hashes'] = current_hashes
+        cache['last_update'] = datetime.now().isoformat()
+        self.save_cache(cache)
+        
+        print(f"RSS feed generated: {self.output_file}")
+        print(f"New content items: {len(new_content)}")
+        return True
+
+def main():
+    url = "https://sites.google.com/ualberta.ca/modular-construction/"
+    generator = GoogleSitesRSSGenerator(url)
+    generator.generate_rss()
+
+if __name__ == "__main__":
+    main()
+
+# To run this periodically, you could set up a cron job:
+# */30 * * * * /usr/bin/python3 /path/to/this/script.py
